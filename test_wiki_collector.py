@@ -61,6 +61,13 @@ def test_extract_date():
     assert wc.extract_date("날짜 없음", pats, "D") == "D"
 
 
+def test_is_url():
+    assert wc.is_url("  https://c.example.com/pages/viewpage.action?pageId=1 \n")
+    assert not wc.is_url("https://a.com 참고하세요")
+    assert not wc.is_url("대화\nhttps://a.com")
+    assert not wc.is_url("ftp://a.com")
+
+
 def test_titles():
     assert wc.clean_title('제목: "탭 그룹 동기화 논의"') == "탭 그룹 동기화 논의"
     assert wc.clean_title("**북마크 정리**") == "북마크 정리"

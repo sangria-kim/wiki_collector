@@ -178,6 +178,11 @@ def strip_code_fence(text):
     return m.group(1) if m else text
 
 
+def is_url(text):
+    """본문이 http(s) URL 한 줄뿐이면 True → Confluence 가져오기로 처리."""
+    return bool(re.fullmatch(r"https?://\S+", text.strip()))
+
+
 def markdown_title(md):
     m = re.search(r"^#\s+(.+)$", md, re.M)
     return m.group(1).strip() if m else ""
@@ -454,8 +459,8 @@ class App:
         self.btn_suggest = tk.Button(frm, text="자동 제안", command=self.on_suggest)
         self.btn_suggest.grid(row=0, column=2, sticky="ew", **pad)
 
-        # 2. 본문 (txt 드롭 대상)
-        dnd = "txt 파일을 여기로 드롭" if TkinterDnD else "txt 열기 버튼 사용"
+        # 2. 본문: 메신저 대화 또는 Confluence URL 한 줄
+        dnd = "창 어디에나 txt 드롭 가능" if TkinterDnD else "txt 열기 버튼 사용"
         tk.Label(frm, text="본문").grid(row=1, column=0, sticky="nw", pady=6)
         self.body = scrolledtext.ScrolledText(frm, wrap="word", undo=True, height=12)
         self.body.grid(row=1, column=1, sticky="nsew", **pad)
@@ -463,21 +468,12 @@ class App:
         side.grid(row=1, column=2, sticky="n", **pad)
         self.btn_open = tk.Button(side, text="txt 열기…", command=self.on_open_txt)
         self.btn_open.pack(fill="x")
-        tk.Label(side, text=f"({dnd})", fg="gray", wraplength=90, justify="left").pack(fill="x", pady=4)
-        if TkinterDnD:
-            self.body.drop_target_register(DND_FILES)
-            self.body.dnd_bind("<<Drop>>", self.on_drop)
+        tk.Label(side, text=f"({dnd})\n\nConfluence URL만 한 줄 넣으면 페이지를 가져옵니다",
+                 fg="gray", wraplength=100, justify="left").pack(fill="x", pady=4)
 
-        # 4. raw에 저장
+        # 4. raw에 저장 (본문이 URL 한 줄이면 Confluence 가져오기)
         self.btn_save = tk.Button(frm, text="raw에 저장", command=self.on_save)
         self.btn_save.grid(row=2, column=1, sticky="e", **pad)
-
-        # 3. Confluence URL
-        tk.Label(frm, text="Confluence").grid(row=3, column=0, sticky="w", pady=(12, 4))
-        self.url_var = tk.StringVar()
-        tk.Entry(frm, textvariable=self.url_var).grid(row=3, column=1, sticky="ew", padx=8, pady=(12, 4))
-        self.btn_fetch = tk.Button(frm, text="가져오기", command=self.on_fetch)
-        self.btn_fetch.grid(row=3, column=2, sticky="ew", padx=8, pady=(12, 4))
 
         # 5. 하단: 대기 목록 + 변환
         bottom = tk.Frame(root)
@@ -489,8 +485,18 @@ class App:
         self.status_var = tk.StringVar(value="준비")
         tk.Label(root, textvariable=self.status_var, anchor="w", relief="sunken", bd=1).pack(fill="x", side="bottom")
 
-        self.buttons = [self.btn_suggest, self.btn_open, self.btn_save, self.btn_fetch, self.btn_wiki]
+        self.buttons = [self.btn_suggest, self.btn_open, self.btn_save, self.btn_wiki]
+        if TkinterDnD:
+            self.register_drop(root)
         self.refresh_pending()
+
+    def register_drop(self, widget):
+        """창 전체에서 드롭되도록 root와 모든 하위 위젯을 드롭 대상으로 등록."""
+        widget.drop_target_register(DND_FILES)
+        widget.dnd_bind("<<Drop>>", self.on_drop)
+        for child in widget.winfo_children():
+            if not isinstance(child, tk.Toplevel):
+                self.register_drop(child)
 
     # --- 공통 ---
     def status(self, msg):
@@ -588,11 +594,14 @@ class App:
                 then()
         self.run_async("제목 제안 중…", lambda: suggest_title(self.cfg, body), done)
 
-    # --- 메신저 저장 ---
+    # --- 저장: 본문이 URL 한 줄이면 Confluence, 아니면 메신저 ---
     def on_save(self):
         body = self.get_body()
         if not body.strip():
             self.status("본문이 비어 있습니다.")
+            return
+        if is_url(body):
+            self.fetch_confluence_url(body.strip())
             return
         if not self.title_var.get().strip():
             self.on_suggest(then=self.save_now)  # 제목 제안 후 저장
@@ -614,11 +623,7 @@ class App:
         self.status(f"저장: {rel_to_raw(raw, path)}")
 
     # --- Confluence ---
-    def on_fetch(self):
-        url = self.url_var.get().strip()
-        if not url:
-            self.status("Confluence URL을 입력하세요.")
-            return
+    def fetch_confluence_url(self, url):
         raw = self.cfg["raw_dir"]
 
         def work():
@@ -638,7 +643,7 @@ class App:
                               "브라우저에서 Confluence 로그인 후 다시 시도하세요.\n\n" + err[-1500:])
                 return
             path, st = result
-            self.url_var.set("")
+            self.body.delete("1.0", "end")
             self.status(f"{'업데이트' if st == 'updated' else '신규 추가'}: {rel_to_raw(raw, path)}")
         self.run_async("Confluence 읽는 중… (브라우저 창이 뜰 수 있고 수십 초 걸릴 수 있습니다)", work, done)
 

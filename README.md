@@ -24,8 +24,8 @@ build.bat      → dist\WikiCollector.exe
 | 동작 | 결과 |
 | --- | --- |
 | 본문에 붙여넣기 → `raw에 저장` | `raw/messenger/YYYY-MM-DD_<제목>.md`. 제목이 비어 있으면 `title_cmd`로 자동 제안한 뒤 저장 |
-| `.txt`를 본문에 드롭 (또는 `txt 열기…`) | 본문이 채워지고 제목칸에 파일명이 들어감 (utf-8 → cp949 순서로 디코딩) |
-| Confluence URL → `가져오기` | `raw/confluence/<pageId>_<제목>.md`. 같은 pageId가 있으면 덮어쓰기(업데이트), 실패하거나 빈 출력이면 저장하지 않음 |
+| `.txt`를 창 어디에나 드롭 (또는 `txt 열기…`) | 본문이 채워지고 제목칸에 파일명이 들어감 (utf-8 → cp949 순서로 디코딩) |
+| 본문에 Confluence URL 한 줄만 넣고 → `raw에 저장` | `raw/confluence/<pageId>_<제목>.md`. 같은 pageId가 있으면 덮어쓰기(업데이트), 실패하거나 빈 출력이면 저장하지 않음 |
 | `Wiki로 변환` | 대기 목록(`raw/.wiki_collector_pending.json`)의 파일을 `wiki_cmd`로 변환. 성공하면 목록을 비우고, "미분류:" 줄은 결과 창 위쪽에 따로 표시 |
 
 ## config.json
