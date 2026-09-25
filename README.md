@@ -35,6 +35,8 @@ build.bat      → dist\WikiCollector.exe
 | `raw_dir`, `wiki_dir` | raw 폴더, wiki 변환을 실행할 작업 폴더(cwd) |
 | `title_cmd` / `title_prompt` | 제목 제안 명령과 프롬프트 (`{text}` = 본문 앞 `title_max_chars`자) |
 | `confluence_cmd` / `confluence_prompt` | Confluence 읽기 명령과 프롬프트 (`{url}`) |
+| `confluence_host` | 비어 있지 않으면 이 host가 들어간 URL만 Confluence로 처리 |
+| `confluence_require_heading` | true면 출력이 `# 제목`으로 시작할 때만 저장 (에러 문구 저장 방지) |
 | `wiki_cmd` / `wiki_prompt` | wiki 변환 명령과 프롬프트 (`{files}` = raw 기준 상대경로 목록, `{raw_dir}`) |
 | `*_timeout` | 초 단위 (제목 60, Confluence 180, wiki 1800) |
 | `date_patterns` | 메신저 대화 날짜 추출용 정규식 목록 (named group `y`, `m`, `d`) |
