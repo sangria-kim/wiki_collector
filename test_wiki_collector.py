@@ -171,13 +171,15 @@ def test_fill_and_build_command():
     # {prompt}/{placeholder}가 없으면 stdin
     cmd, stdin = wc.build_command("claude -p", "hi {url}", {"url": "U"})
     assert cmd == "claude -p" and stdin == "hi U"
-    # {prompt}가 있으면 인라인 + 이스케이프
+    # {prompt}가 있으면 인라인 + 이스케이프 (Windows는 "를 '로, 그 외는 \"로 이스케이프)
     cmd, stdin = wc.build_command('tool "{prompt}"', 'say "{text}"', {"text": "x"})
     assert stdin is None
-    assert cmd == ('tool "say \\"x\\""'), cmd
+    expected = 'tool "say \'x\'"' if wc.IS_WINDOWS else 'tool "say \\"x\\""'
+    assert cmd == expected, cmd
     # 구형(PLAN) 형식: cmd에 {text} 직접
     cmd, stdin = wc.build_command('codex exec "제목: {text}"', None, {"text": 'a"b'})
-    assert stdin is None and cmd == 'codex exec "제목: a\\"b"'
+    expected2 = "codex exec \"제목: a'b\"" if wc.IS_WINDOWS else 'codex exec "제목: a\\"b"'
+    assert stdin is None and cmd == expected2, cmd
 
 
 def test_run_cli_and_flows():
