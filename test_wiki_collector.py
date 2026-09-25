@@ -59,6 +59,8 @@ def test_extract_date():
     assert wc.extract_date("2026년 8월 7일 목요일\n2026-09-04", pats, "D") == "2026-08-07"
     assert wc.extract_date("2026/13/40 잘못된 날짜 2026.2.5", pats, "D") == "2026-02-05"
     assert wc.extract_date("날짜 없음", pats, "D") == "D"
+    # 줄 맨 앞 타임스탬프가 문장 중간 날짜보다 우선
+    assert wc.extract_date("회의 2024.1.3 버전 관련\n[2026-09-20 10:00] 홍길동", pats, "D") == "2026-09-20"
 
 
 def test_is_url():
@@ -66,6 +68,8 @@ def test_is_url():
     assert not wc.is_url("https://a.com 참고하세요")
     assert not wc.is_url("대화\nhttps://a.com")
     assert not wc.is_url("ftp://a.com")
+    assert wc.is_url("https://wiki.corp.com/pages/1", "wiki.corp.com")
+    assert not wc.is_url("https://youtube.com/x", "wiki.corp.com")
 
 
 def test_titles():
@@ -107,6 +111,7 @@ def test_save_confluence():
         # 같은 페이지, 같은 제목 → 덮어쓰기
         p2, st, old = wc.save_confluence(raw, url, "# 스펙 v1\n수정된 본문", NOW)
         assert p2 == p and st == "updated" and old == []
+        assert "\n본문\n" in wc.read_text_file(p + ".bak")  # 업데이트 전 내용 백업
         assert "수정된 본문" in wc.read_text_file(p)
 
         # 제목 변경 → rename (파일 1개 유지)
@@ -119,7 +124,7 @@ def test_save_confluence():
         assert p4 == p3
 
         # 빈 본문은 거부, 기존 파일 보존
-        for empty in ("", "   \n", "```\n\n```"):
+        for empty in ("", "   \n", "```\n\n```", "```markdown\n```", "``````"):
             try:
                 wc.save_confluence(raw, url, empty, NOW)
                 assert False, "빈 본문이 저장됨"
@@ -148,6 +153,13 @@ def test_pending():
         with open(os.path.join(raw, wc.PENDING_FILE), "w", encoding="utf-8") as f:
             json.dump(["messenger/x.md"], f)
         assert wc.load_pending(raw) == [{"path": "messenger/x.md", "status": "new"}]
+        # 형식이 이상한 항목은 무시/보정
+        with open(os.path.join(raw, wc.PENDING_FILE), "w", encoding="utf-8") as f:
+            json.dump([{"path": "a.md"}, {"x": 1}, 3], f)
+        assert wc.load_pending(raw) == [{"path": "a.md", "status": "new"}]
+        with open(os.path.join(raw, wc.PENDING_FILE), "w", encoding="utf-8") as f:
+            json.dump({"path": "a.md"}, f)
+        assert wc.load_pending(raw) == []
         # 깨진 파일 → 빈 목록
         with open(os.path.join(raw, wc.PENDING_FILE), "w", encoding="utf-8") as f:
             f.write("{broken")
@@ -187,6 +199,11 @@ def test_run_cli_and_flows():
     cfg["confluence_cmd"] = f'{PY} -c "print(\'# 제목\\n본문\')"'
     md, err = wc.fetch_confluence(cfg, "https://x/pages/1")
     assert md and md.startswith("# 제목") and err == ""
+    cfg["confluence_cmd"] = f'{PY} -c "print(\'Confluence에 로그인되어 있지 않아 읽을 수 없습니다.\')"'
+    md, err = wc.fetch_confluence(cfg, "u")
+    assert md is None and "# 제목" in err
+    cfg["confluence_cmd"] = f'{PY} -c "print(\'ERROR: login required\')"'
+    assert wc.fetch_confluence(cfg, "u") == (None, "ERROR: login required")
     cfg["confluence_cmd"] = f'{PY} -c "print()"'
     assert wc.fetch_confluence(cfg, "u") == (None, "출력이 비어 있습니다.")
     cfg["confluence_cmd"] = f'{PY} -c "import sys; sys.stderr.write(\'login required\'); sys.exit(2)"'

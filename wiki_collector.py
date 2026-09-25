@@ -11,6 +11,7 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import threading
@@ -46,8 +47,16 @@ DEFAULT_CONFIG = {
     "title_max_chars": 3000,
     "title_timeout": 60,
     "confluence_cmd": "claude -p",
-    "confluence_prompt": "/<confluence-skill> {url} 페이지 본문을 마크다운으로만 출력해. 설명이나 인사말 없이 본문만 출력해.",
+    "confluence_prompt": (
+        "/<confluence-skill> {url} 페이지 본문을 마크다운으로만 출력해. 설명이나 인사말 없이 본문만 출력해.\n"
+        "성공하면 반드시 첫 줄을 \"# <페이지 제목>\"으로 시작해. "
+        "로그인 실패 등으로 페이지를 읽지 못하면 다른 내용 없이 \"ERROR: <이유>\" 한 줄만 출력해."
+    ),
     "confluence_timeout": 180,
+    # 성공 출력은 '# 제목' 헤딩으로 시작해야 저장 (에러 설명이 본문으로 저장되는 것 방지)
+    "confluence_require_heading": True,
+    # 값이 있으면 이 문자열이 host에 포함된 URL만 Confluence로 처리 (예: "confluence.mycompany.com")
+    "confluence_host": "",
     "wiki_cmd": "claude -p --permission-mode acceptEdits",
     "wiki_prompt": (
         "raw 폴더({raw_dir})의 다음 파일들을 wiki에 반영해줘 (경로는 raw 폴더 기준):\n"
@@ -140,9 +149,22 @@ def extract_page_id(url):
 
 
 def extract_date(text, patterns, default):
-    """본문에서 가장 먼저 나오는 날짜(YYYY-MM-DD)를 찾는다. 없으면 default."""
+    """대화 날짜(YYYY-MM-DD). 줄 맨 앞(대괄호 허용)의 날짜를 우선 찾고, 없으면 본문 어디서든 처음 나오는 날짜.
+
+    버전 번호/마감일처럼 문장 중간에 나오는 날짜보다 타임스탬프를 우선하기 위함. 없으면 default.
+    """
+    for anchored in (True, False):
+        d = _first_date(text, patterns, anchored)
+        if d:
+            return d
+    return default
+
+
+def _first_date(text, patterns, anchored):
     best = None
     for pat in patterns:
+        if anchored:
+            pat = r"(?m)^[ \t]*[\[(]?[ \t]*(?:" + pat + ")"
         for m in re.finditer(pat, text):
             try:
                 d = datetime.date(int(m.group("y")), int(m.group("m")), int(m.group("d")))
@@ -151,7 +173,7 @@ def extract_date(text, patterns, default):
             if best is None or m.start() < best[0]:
                 best = (m.start(), d)
             break  # 패턴별 첫 유효 매치만 보면 됨
-    return best[1].isoformat() if best else default
+    return best[1].isoformat() if best else None
 
 
 def first_line(text):
@@ -174,13 +196,14 @@ def fallback_title(body):
 
 def strip_code_fence(text):
     """출력 전체가 ```markdown ... ``` 로 감싸져 있으면 벗겨낸다."""
-    m = re.match(r"^\s*```[\w-]*\n(.*)\n```\s*$", text, re.S)
+    m = re.match(r"^\s*```[\w-]*\n?(.*?)\n?```\s*$", text, re.S)
     return m.group(1) if m else text
 
 
-def is_url(text):
-    """본문이 http(s) URL 한 줄뿐이면 True → Confluence 가져오기로 처리."""
-    return bool(re.fullmatch(r"https?://\S+", text.strip()))
+def is_url(text, host=""):
+    """본문이 http(s) URL 한 줄뿐이면 True → Confluence 가져오기로 처리. host가 있으면 도메인도 확인."""
+    m = re.fullmatch(r"https?://([^/\s?#]+)\S*", text.strip())
+    return bool(m) and (not host or host.lower() in m.group(1).lower())
 
 
 def markdown_title(md):
@@ -274,6 +297,8 @@ def save_confluence(raw_dir, url, markdown, now=None):
     path = os.path.join(raw_dir, "confluence", f"{page_id}_{sanitize_filename(title)}.md")
     fm = build_frontmatter({"source": "confluence", "title": title, "url": url.strip(),
                             "page_id": page_id, "collected_at": now_str(now)})
+    for p in existing:  # 업데이트 전 기존 내용을 .bak으로 보관 (가장 최근 1개)
+        shutil.copyfile(p, p + ".bak")
     write_text(path, fm + markdown + "\n")
     old = [p for p in existing if os.path.normcase(os.path.abspath(p)) != os.path.normcase(os.path.abspath(path))]
     for p in old:  # 제목이 바뀐 경우: 새 이름으로 쓰고 옛 파일 삭제 (= rename)
@@ -297,10 +322,15 @@ def load_pending(raw_dir):
             data = json.load(f)
     except (OSError, ValueError):
         return []
+    if not isinstance(data, list):
+        return []
     out = []
     for item in data:
         if isinstance(item, str):  # 경로만 있는 형식도 허용
-            item = {"path": item, "status": "new"}
+            item = {"path": item}
+        if not isinstance(item, dict) or not isinstance(item.get("path"), str):
+            continue
+        item.setdefault("status", "new")
         out.append(item)
     return out
 
@@ -335,10 +365,14 @@ def pending_counts(items):
 # ---------------------------------------------------------------------------
 
 def shell_escape(value):
-    """큰따옴표 안에 넣을 값 이스케이프. Windows(cmd)는 줄바꿈도 명령을 끊으므로 공백으로 바꾼다."""
+    """큰따옴표 안에 넣을 값 이스케이프.
+
+    Windows(cmd.exe)는 \\"를 이스케이프로 인정하지 않아 값 속 "가 따옴표를 닫고 & | > ^ 등이 살아나므로,
+    "는 '로 바꾸고 줄바꿈은 공백으로 바꾼다. %VAR% 확장은 막지 못하므로 긴 본문({text})은 stdin 방식을 권장.
+    """
     value = str(value)
     if IS_WINDOWS:
-        return value.replace("\r", "").replace("\n", " ").replace('"', '\\"')
+        return value.replace("\r", "").replace("\n", " ").replace('"', "'")
     return re.sub(r'(["\\$`])', r"\\\1", value)
 
 
@@ -413,8 +447,13 @@ def fetch_confluence(cfg, url):
     code, out, err = run_cli(cmd, stdin, timeout=cfg.get("confluence_timeout", 180))
     if code != 0:
         return None, (err or out).strip() or f"종료 코드 {code}"
-    if not strip_code_fence(out).strip():
+    body = strip_code_fence(out).strip()
+    if not body:
         return None, "출력이 비어 있습니다."
+    if re.match(r"(?i)^\**\s*error\s*[:：]", body):
+        return None, body
+    if cfg.get("confluence_require_heading", True) and not re.match(r"#\s+\S", body):
+        return None, "출력이 '# 제목'으로 시작하지 않아 페이지 본문으로 보지 않았습니다:\n\n" + body[:500]
     return out, ""
 
 
@@ -600,7 +639,7 @@ class App:
         if not body.strip():
             self.status("본문이 비어 있습니다.")
             return
-        if is_url(body):
+        if is_url(body, self.cfg.get("confluence_host", "")):
             self.fetch_confluence_url(body.strip())
             return
         if not self.title_var.get().strip():
@@ -726,9 +765,11 @@ def main():
         root.withdraw()
         messagebox.showerror(APP_NAME, f"config.json을 읽을 수 없습니다:\n{cfg_path}\n\n{e}")
         return
+    root.withdraw()  # 폴더 선택 중에 빈 창이 보이지 않게
     if not ensure_dirs(root, cfg, cfg_path):
         root.destroy()
         return
+    root.deiconify()
     App(root, cfg, cfg_path)
     root.mainloop()
 
