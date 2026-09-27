@@ -1,6 +1,6 @@
 # Wiki Collector — 구현 계획
 
-> 구현 세션은 이 문서와 `wiki_collelctor_prd.md`를 읽고 시작. 하단 TODO는 사내 PC에서 확인 후 config/프롬프트에 반영.
+> 구현 세션은 이 문서와 `doc/wiki_collelctor_prd.md`를 읽고 시작. 하단 TODO는 사내 PC에서 확인 후 config/프롬프트에 반영.
 
 ## Context
 Windows PC의 llm-wiki는 `raw/` 폴더(삼성 브라우저 PRD, Confluence 회의록)를 Claude로 wiki 변환해 쓰고 있음.
