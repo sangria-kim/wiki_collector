@@ -58,4 +58,4 @@ build.bat      → dist\WikiCollector.exe
 python test_wiki_collector.py
 ```
 
-구현 중에 임의로 판단한 내용은 [DECISIONS.md](DECISIONS.md)에 정리되어 있습니다.
+구현 중에 임의로 판단한 내용은 [DECISIONS.md](plan/DECISIONS.md)에 정리되어 있습니다.
