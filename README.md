@@ -3,6 +3,24 @@ llm-wiki에 추가할 raw 자료들을 수집
 
 메신저 대화(복붙 / export txt), 회의 녹취(전사 txt), Confluence 페이지를 llm-wiki의 `raw/` 폴더에 저장하고, 버튼 하나로 Claude CLI를 불러 wiki 변환까지 실행하는 작은 Windows 데스크톱 앱입니다.
 
+## 처음 실행하기 (Windows, 권장)
+
+exe 없이 Python으로 바로 실행하는 방법입니다. Windows 11의 **스마트 앱 컨트롤**이 켜진 PC에서는 서명되지 않은 `WikiCollector.exe`가 "애플리케이션 제어 정책에서 이 파일을 차단했습니다"로 막히므로, 이 방법을 기본으로 사용합니다(`python.exe`는 서명되어 있어 막히지 않음).
+
+1. Python 3 설치 (python.org, 설치 시 "Add python.exe to PATH" 체크)
+2. 드래그앤드롭용 패키지 설치 (한 번만. 없어도 `txt 열기…` 버튼으로 동작)
+   ```
+   python -m pip install tkinterdnd2
+   ```
+3. 프로젝트 폴더에서 실행
+   ```
+   cd H:\Claude\wiki_collector
+   pythonw wiki_collector.py
+   ```
+   `pythonw`는 콘솔 창 없이 앱 창만 띄웁니다. 에러 메시지를 보고 싶으면 `python wiki_collector.py`로 실행합니다.
+4. 처음 실행하면 raw 폴더와 llm-wiki 폴더를 고르는 창이 뜹니다. 선택 값은 스크립트 옆 `config.json`에 저장됩니다.
+5. 제목 제안 / Confluence / Wiki 변환은 `claude` CLI를 호출하므로 `claude`가 PATH에 있어야 합니다 (`where claude`로 확인).
+
 ## 실행
 
 ```
@@ -18,6 +36,8 @@ python wiki_collector.py
 ```
 build.bat      → dist\WikiCollector.exe
 ```
+
+스마트 앱 컨트롤이 켜진 PC에서는 빌드한 exe가 실행되지 않습니다(코드 서명 필요). 이 경우 위의 "처음 실행하기"대로 Python으로 실행합니다.
 
 ## 사용
 
