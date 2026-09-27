@@ -79,6 +79,8 @@ DEFAULT_CONFIG = {
         r"(?P<y>20\d{2})[-./](?P<m>\d{1,2})[-./](?P<d>\d{1,2})",
         r"(?P<y>20\d{2})년\s*(?P<m>\d{1,2})월\s*(?P<d>\d{1,2})일",
     ],
+    # 불러온 txt 본문이 이 정규식 중 하나에 매치되면 회의록(녹취)으로 판별. 샘플을 받은 뒤 채운다.
+    "meeting_patterns": [],
 }
 
 
@@ -206,6 +208,19 @@ def is_url(text, host=""):
     return bool(m) and (not host or host.lower() in m.group(1).lower())
 
 
+def detect_kind(text, cfg):
+    """불러온 txt의 유형 판별: "confluence" | "meeting" | None(판별 안 됨 → 사용자 선택 유지)."""
+    if is_url(text, cfg.get("confluence_host", "")):
+        return "confluence"
+    for pat in cfg.get("meeting_patterns", []):
+        try:
+            if re.search(pat, text, re.M):
+                return "meeting"
+        except re.error:  # 잘못된 정규식은 건너뜀
+            continue
+    return None
+
+
 def markdown_title(md):
     m = re.search(r"^#\s+(.+)$", md, re.M)
     return m.group(1).strip() if m else ""
@@ -263,13 +278,13 @@ def write_text(path, text):
 # 저장
 # ---------------------------------------------------------------------------
 
-def save_messenger(raw_dir, title, body, date_patterns, now=None):
-    """raw/messenger/YYYY-MM-DD_<제목>.md 로 저장하고 경로를 반환."""
+def save_messenger(raw_dir, title, body, date_patterns, now=None, source="messenger"):
+    """raw/<source>/YYYY-MM-DD_<제목>.md 로 저장하고 경로를 반환. 회의록은 source="meeting"."""
     now = now or datetime.datetime.now()
     title = title.strip() or fallback_title(body)
     date = extract_date(body, date_patterns, now.date().isoformat())
-    path = unique_path(os.path.join(raw_dir, "messenger", f"{date}_{sanitize_filename(title)}.md"))
-    fm = build_frontmatter({"source": "messenger", "title": title, "date": date,
+    path = unique_path(os.path.join(raw_dir, source, f"{date}_{sanitize_filename(title)}.md"))
+    fm = build_frontmatter({"source": source, "title": title, "date": date,
                             "collected_at": now_str(now)})
     write_text(path, fm + body.rstrip() + "\n")
     return path
@@ -489,30 +504,41 @@ class App:
         frm = tk.Frame(root)
         frm.pack(fill="both", expand=True, **pad)
         frm.columnconfigure(1, weight=1)
-        frm.rowconfigure(1, weight=1)
+        frm.rowconfigure(2, weight=1)
+
+        # 0. 유형: txt를 불러오면 자동 판별 (판별 안 되면 선택 유지)
+        tk.Label(frm, text="유형").grid(row=0, column=0, sticky="w")
+        self.kind_var = tk.StringVar(value="messenger")
+        kinds = tk.Frame(frm)
+        kinds.grid(row=0, column=1, sticky="w", **pad)
+        self.kind_buttons = [
+            tk.Radiobutton(kinds, text=label, value=value, variable=self.kind_var)
+            for label, value in (("메신저", "messenger"), ("Confluence", "confluence"), ("회의록", "meeting"))]
+        for b in self.kind_buttons:
+            b.pack(side="left")
 
         # 1. 제목
-        tk.Label(frm, text="제목").grid(row=0, column=0, sticky="w")
+        tk.Label(frm, text="제목").grid(row=1, column=0, sticky="w")
         self.title_var = tk.StringVar()
-        tk.Entry(frm, textvariable=self.title_var).grid(row=0, column=1, sticky="ew", **pad)
+        tk.Entry(frm, textvariable=self.title_var).grid(row=1, column=1, sticky="ew", **pad)
         self.btn_suggest = tk.Button(frm, text="자동 제안", command=self.on_suggest)
-        self.btn_suggest.grid(row=0, column=2, sticky="ew", **pad)
+        self.btn_suggest.grid(row=1, column=2, sticky="ew", **pad)
 
-        # 2. 본문: 메신저 대화 또는 Confluence URL 한 줄
+        # 2. 본문: 메신저 대화 / 회의 녹취 또는 Confluence URL 한 줄
         dnd = "창 어디에나 txt 드롭 가능" if TkinterDnD else "txt 열기 버튼 사용"
-        tk.Label(frm, text="본문").grid(row=1, column=0, sticky="nw", pady=6)
+        tk.Label(frm, text="본문").grid(row=2, column=0, sticky="nw", pady=6)
         self.body = scrolledtext.ScrolledText(frm, wrap="word", undo=True, height=12)
-        self.body.grid(row=1, column=1, sticky="nsew", **pad)
+        self.body.grid(row=2, column=1, sticky="nsew", **pad)
         side = tk.Frame(frm)
-        side.grid(row=1, column=2, sticky="n", **pad)
+        side.grid(row=2, column=2, sticky="n", **pad)
         self.btn_open = tk.Button(side, text="txt 열기…", command=self.on_open_txt)
         self.btn_open.pack(fill="x")
-        tk.Label(side, text=f"({dnd})\n\nConfluence URL만 한 줄 넣으면 페이지를 가져옵니다",
+        tk.Label(side, text=f"({dnd})\n\nConfluence는 URL 한 줄만 넣으세요",
                  fg="gray", wraplength=100, justify="left").pack(fill="x", pady=4)
 
         # 4. raw에 저장 (본문이 URL 한 줄이면 Confluence 가져오기)
         self.btn_save = tk.Button(frm, text="raw에 저장", command=self.on_save)
-        self.btn_save.grid(row=2, column=1, sticky="e", **pad)
+        self.btn_save.grid(row=3, column=1, sticky="e", **pad)
 
         # 5. 하단: 대기 목록 + 변환
         bottom = tk.Frame(root)
@@ -524,7 +550,7 @@ class App:
         self.status_var = tk.StringVar(value="준비")
         tk.Label(root, textvariable=self.status_var, anchor="w", relief="sunken", bd=1).pack(fill="x", side="bottom")
 
-        self.buttons = [self.btn_suggest, self.btn_open, self.btn_save, self.btn_wiki]
+        self.buttons = [self.btn_suggest, self.btn_open, self.btn_save, self.btn_wiki, *self.kind_buttons]
         if TkinterDnD:
             self.register_drop(root)
         self.refresh_pending()
@@ -597,7 +623,13 @@ class App:
         self.body.delete("1.0", "end")
         self.body.insert("1.0", text)
         self.title_var.set(os.path.splitext(os.path.basename(path))[0])
-        self.status(f"불러옴: {os.path.basename(path)}")
+        kind = detect_kind(text, self.cfg)
+        if kind:
+            self.kind_var.set(kind)
+            label = {"confluence": "Confluence로", "meeting": "회의록으로"}[kind]
+            self.status(f"불러옴: {os.path.basename(path)} ({label} 판별)")
+        else:
+            self.status(f"불러옴: {os.path.basename(path)} (유형 판별 안 됨, 선택 유지)")
 
     def on_drop(self, event):
         paths = self.root.tk.splitlist(event.data)
@@ -633,7 +665,7 @@ class App:
                 then()
         self.run_async("제목 제안 중…", lambda: suggest_title(self.cfg, body), done)
 
-    # --- 저장: 본문이 URL 한 줄이면 Confluence, 아니면 메신저 ---
+    # --- 저장: 본문이 URL 한 줄이면 Confluence, 아니면 선택한 유형(메신저/회의록) ---
     def on_save(self):
         body = self.get_body()
         if not body.strip():
@@ -642,6 +674,9 @@ class App:
         if is_url(body, self.cfg.get("confluence_host", "")):
             self.fetch_confluence_url(body.strip())
             return
+        if self.kind_var.get() == "confluence":
+            self.status("Confluence URL 한 줄을 입력하세요.")
+            return
         if not self.title_var.get().strip():
             self.on_suggest(then=self.save_now)  # 제목 제안 후 저장
             return
@@ -649,17 +684,19 @@ class App:
 
     def save_now(self):
         body, title = self.get_body(), self.title_var.get().strip()
-        raw = self.cfg["raw_dir"]
+        raw, kind = self.cfg["raw_dir"], self.kind_var.get()
         try:
-            path = save_messenger(raw, title, body, self.cfg.get("date_patterns", []))
-            add_pending(raw, path, "new")
+            path = save_messenger(raw, title, body, self.cfg.get("date_patterns", []), source=kind)
+            if kind != "meeting":  # 회의 녹취는 wiki 변환 대기 목록에 넣지 않음
+                add_pending(raw, path, "new")
         except OSError as e:
             messagebox.showerror(APP_NAME, f"저장 실패:\n{e}")
             return
         self.title_var.set("")
         self.body.delete("1.0", "end")
+        self.kind_var.set("messenger")  # 다음 메신저 대화가 회의록으로 저장되지 않게 복귀
         self.refresh_pending()
-        self.status(f"저장: {rel_to_raw(raw, path)}")
+        self.status(f"{'회의록 저장' if kind == 'meeting' else '저장'}: {rel_to_raw(raw, path)}")
 
     # --- Confluence ---
     def fetch_confluence_url(self, url):

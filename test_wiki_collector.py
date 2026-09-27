@@ -72,6 +72,15 @@ def test_is_url():
     assert not wc.is_url("https://youtube.com/x", "wiki.corp.com")
 
 
+def test_detect_kind():
+    cfg = dict(wc.DEFAULT_CONFIG)
+    assert wc.detect_kind("https://c.example.com/pages/1", cfg) == "confluence"
+    assert wc.detect_kind("회의록\n참석자: 홍길동", cfg) is None  # 패턴이 비어 있으면 판별 안 됨
+    cfg["meeting_patterns"] = ["[", r"^회의록"]  # 잘못된 정규식은 건너뜀
+    assert wc.detect_kind("회의록\n참석자: 홍길동", cfg) == "meeting"
+    assert wc.detect_kind("홍길동: 안녕", cfg) is None
+
+
 def test_titles():
     assert wc.clean_title('제목: "탭 그룹 동기화 논의"') == "탭 그룹 동기화 논의"
     assert wc.clean_title("**북마크 정리**") == "북마크 정리"
@@ -98,6 +107,9 @@ def test_save_messenger():
         assert wc.read_text_file(p1).endswith(body + "\n")
         p3 = wc.save_messenger(raw, "", "날짜 없는 대화\n...", [], NOW)
         assert os.path.basename(p3) == "2026-09-25_날짜 없는 대화.md"
+        p4 = wc.save_messenger(raw, "주간 회의", body, wc.DEFAULT_CONFIG["date_patterns"], NOW, source="meeting")
+        assert p4 == os.path.join(raw, "meeting", "2026-09-20_주간 회의.md"), p4
+        assert wc.read_frontmatter(p4)["source"] == "meeting"
 
 
 def test_save_confluence():
@@ -227,7 +239,7 @@ def test_config():
     with tempfile.TemporaryDirectory() as d:
         p = os.path.join(d, "config.json")
         cfg = wc.load_config(p)
-        assert os.path.exists(p) and cfg["confluence_timeout"] == 180
+        assert os.path.exists(p) and cfg["confluence_timeout"] == 180 and cfg["meeting_patterns"] == []
         with open(p, "w", encoding="utf-8") as f:
             json.dump({"raw_dir": "R", "confluence_timeout": 300}, f)
         cfg = wc.load_config(p)
