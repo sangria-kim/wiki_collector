@@ -438,13 +438,57 @@ def kill_tree(p):
     """shell=True면 cmd.exe/sh 아래 실제 CLI(node 등)가 남아 파이프를 붙잡으므로 트리째 종료."""
     try:
         if IS_WINDOWS:
-            subprocess.run(f"taskkill /F /T /PID {p.pid}", shell=True, capture_output=True,
-                           creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+            r = subprocess.run(f"taskkill /F /T /PID {p.pid}", shell=True, capture_output=True,
+                               creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+            if r.returncode != 0:
+                # 콘솔에서 실행하면 taskkill이 "액세스가 거부되었습니다"로 아무것도 못 죽이는 경우가 있음
+                for pid in _descendants(p.pid):
+                    try:
+                        os.kill(pid, 15)  # Windows에서는 TerminateProcess
+                    except OSError:
+                        pass
+                p.kill()
         else:
             import signal
             os.killpg(p.pid, signal.SIGKILL)
     except OSError:
         p.kill()
+
+
+def _descendants(root_pid):
+    """Windows 프로세스 스냅샷에서 root_pid의 자손 PID 목록 (자식부터)."""
+    import ctypes
+    from ctypes import wintypes
+
+    class PROCESSENTRY32(ctypes.Structure):
+        _fields_ = [("dwSize", wintypes.DWORD), ("cntUsage", wintypes.DWORD),
+                    ("th32ProcessID", wintypes.DWORD), ("th32DefaultHeapID", ctypes.c_size_t),
+                    ("th32ModuleID", wintypes.DWORD), ("cntThreads", wintypes.DWORD),
+                    ("th32ParentProcessID", wintypes.DWORD), ("pcPriClassBase", ctypes.c_long),
+                    ("dwFlags", wintypes.DWORD), ("szExeFile", ctypes.c_char * 260)]
+
+    k32 = ctypes.windll.kernel32
+    k32.CreateToolhelp32Snapshot.restype = wintypes.HANDLE
+    snap = k32.CreateToolhelp32Snapshot(2, 0)  # TH32CS_SNAPPROCESS
+    if not snap or snap == wintypes.HANDLE(-1).value:
+        return []
+    children = {}
+    try:
+        e = PROCESSENTRY32()
+        e.dwSize = ctypes.sizeof(PROCESSENTRY32)
+        ok = k32.Process32First(snap, ctypes.byref(e))
+        while ok:
+            children.setdefault(e.th32ParentProcessID, []).append(e.th32ProcessID)
+            ok = k32.Process32Next(snap, ctypes.byref(e))
+    finally:
+        k32.CloseHandle(snap)
+    result, todo = [], [root_pid]
+    while todo:
+        for c in children.get(todo.pop(), []):
+            if c not in result and c != root_pid:  # PID 재사용으로 생기는 순환 방지
+                result.append(c)
+                todo.append(c)
+    return result
 
 
 def suggest_title(cfg, body):

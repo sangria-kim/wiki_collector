@@ -95,3 +95,12 @@ PLAN.md를 기준으로 구현하면서 계획에 없거나 모호해서 임의�
 - 저장에 성공하면 라디오를 `메신저`로 되돌린다(다음 메신저 대화가 회의록으로 저장돼 wiki 반영이 빠지는 것 방지). 제목 제안 대기 중에는 라디오도 비활성화한다.
 - Confluence를 골랐는데 본문이 URL 한 줄이 아니면 저장하지 않고 안내한다. 본문이 URL 한 줄이면 선택과 상관없이 Confluence로 가져온다(5-1 규칙 유지).
 - 보류: 회의록 전용 제목 프롬프트, UTF-16 전사 파일 디코딩(샘플 인코딩 확인 후 결정).
+
+## 10. Windows 콘솔에서 타임아웃 프로세스가 안 죽는 문제
+- 증상: 콘솔(PowerShell/cmd)에서 `build.bat`을 실행하면 `test_run_cli_and_flows`의 타임아웃 검사가 실패함. `kill_tree`의 `taskkill /F /T`가 "액세스가 거부되었습니다"(종료 코드 1)로 아무 프로세스도 종료하지 못해서, `run_cli`가 자식(`sleep 30`)이 끝날 때까지 30초를 기다림. 앱에서도 CLI 타임아웃이 사실상 동작하지 않는 문제였음.
+- 조치: taskkill이 0이 아닌 코드를 돌려주면 `CreateToolhelp32Snapshot`으로 자손 PID를 구해 하나씩 `TerminateProcess`(`os.kill`)로 종료한 뒤 `p.kill()`. taskkill을 먼저 시도하는 기존 경로는 유지함.
+- taskkill이 거부되는 정확한 이유(conhost 권한 문제로 추정)는 확인하지 않았음. Job Object 방식은 Popen 직후 할당 전 경합이 있고 변경 범위가 커서 쓰지 않음.
+
+## 11. 스마트 앱 컨트롤 PC에서는 Python으로 실행
+- 개발 PC(Windows 11)에서 스마트 앱 컨트롤이 켜져 있어 서명 없는 `dist\WikiCollector.exe`가 차단됨(CodeIntegrity 이벤트 3077/3033).
+- 사용자 합의: 이 PC에서는 항상 `pythonw wiki_collector.py`로 실행하고, README 맨 앞에 "처음 실행하기"로 정리함. 코드 서명과 스마트 앱 컨트롤 끄기는 하지 않음.
