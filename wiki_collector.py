@@ -79,9 +79,19 @@ DEFAULT_CONFIG = {
         r"(?P<y>20\d{2})[-./](?P<m>\d{1,2})[-./](?P<d>\d{1,2})",
         r"(?P<y>20\d{2})년\s*(?P<m>\d{1,2})월\s*(?P<d>\d{1,2})일",
     ],
-    # 불러온 txt 본문이 이 정규식 중 하나에 매치되면 회의록(녹취)으로 판별. 샘플을 받은 뒤 채운다.
-    "meeting_patterns": [],
+    # 불러오거나 붙여넣은 본문이 이 정규식 중 하나에 매치되면(줄 단위 ^) 회의록(녹취)으로 판별.
+    # 전사 txt 형식: "발화자 1  (00:01)" (1시간 이상은 "(1:02:03)"로 추정)
+    "meeting_patterns": [
+        r"^발화자 \d+[ \t]+\((?:\d+:)?\d{1,2}:\d{2}\)[ \t\r]*$",
+    ],
+    # 메신저 대화 헤더 형식: "[이름 (닉네임)] 2026-09-28 00:59" (닉네임 괄호는 없을 수 있음)
+    "messenger_patterns": [
+        r"^\[[^\]\n]+\][ \t]+\d{4}-\d{2}-\d{2}[ \t]+\d{1,2}:\d{2}[ \t\r]*$",
+    ],
 }
+
+# 제목(=불러온 파일명)에서만 쓰는 날짜 패턴: 녹음 파일명의 YYMMDD (본문의 6자리 숫자 오인 방지)
+TITLE_DATE_PATTERNS = [r"(?<!\d)(?P<y>\d{2})(?P<m>\d{2})(?P<d>\d{2})(?!\d)"]
 
 
 def app_dir():
@@ -97,6 +107,9 @@ def load_config(path):
     if os.path.exists(path):
         with open(path, encoding="utf-8-sig") as f:
             cfg.update(json.load(f))
+        # 판별 규칙이 생기기 전 config에 저장된 빈 목록은 기본값으로 채움 (끄려면 매치되지 않는 패턴을 넣음)
+        if not cfg.get("meeting_patterns"):
+            cfg["meeting_patterns"] = list(DEFAULT_CONFIG["meeting_patterns"])
     else:
         save_config(path, cfg)
     return cfg
@@ -112,7 +125,9 @@ def save_config(path, cfg):
 # ---------------------------------------------------------------------------
 
 def decode_bytes(data):
-    """메신저 export txt 디코딩: utf-8(BOM 포함) → 실패 시 cp949."""
+    """txt 디코딩: UTF-16(BOM, 회의 전사 파일) → utf-8(BOM 포함) → 실패 시 cp949."""
+    if data[:2] in (b"\xff\xfe", b"\xfe\xff"):
+        return data.decode("utf-16", errors="replace")
     try:
         return data.decode("utf-8-sig")
     except UnicodeDecodeError:
@@ -121,7 +136,8 @@ def decode_bytes(data):
 
 def read_text_file(path):
     with open(path, "rb") as f:
-        return decode_bytes(f.read())
+        text = decode_bytes(f.read())
+    return text.replace("\r\n", "\n").replace("\r", "\n")  # CRLF가 raw md에 섞이지 않게
 
 
 def sanitize_filename(name, max_len=80):
@@ -166,10 +182,13 @@ def _first_date(text, patterns, anchored):
     best = None
     for pat in patterns:
         if anchored:
-            pat = r"(?m)^[ \t]*[\[(]?[ \t]*(?:" + pat + ")"
+            # "[이름 (닉네임)] 2026-09-28 00:59"처럼 앞에 [이름] 블록이 있는 메신저 헤더도 허용
+            pat = r"(?m)^[ \t]*(?:\[[^\]\n]*\][ \t]*)?[\[(]?[ \t]*(?:" + pat + ")"
         for m in re.finditer(pat, text):
             try:
-                d = datetime.date(int(m.group("y")), int(m.group("m")), int(m.group("d")))
+                y = int(m.group("y"))
+                y += 2000 if y < 100 else 0  # 두 자리 연도(파일명 YYMMDD)
+                d = datetime.date(y, int(m.group("m")), int(m.group("d")))
             except (ValueError, IndexError):
                 continue
             if best is None or m.start() < best[0]:
@@ -208,16 +227,27 @@ def is_url(text, host=""):
     return bool(m) and (not host or host.lower() in m.group(1).lower())
 
 
-def detect_kind(text, cfg):
-    """불러온 txt의 유형 판별: "confluence" | "meeting" | None(판별 안 됨 → 사용자 선택 유지)."""
-    if is_url(text, cfg.get("confluence_host", "")):
-        return "confluence"
-    for pat in cfg.get("meeting_patterns", []):
+def _any_match(patterns, text):
+    for pat in patterns:
         try:
             if re.search(pat, text, re.M):
-                return "meeting"
+                return True
         except re.error:  # 잘못된 정규식은 건너뜀
             continue
+    return False
+
+
+def detect_kind(text, cfg):
+    """불러오거나 붙여넣은 본문의 유형 판별: "confluence" | "meeting" | "messenger" | None(선택 유지).
+
+    회의록을 메신저보다 먼저 본다(녹취가 wiki 대기 목록에 잘못 들어가는 쪽이 더 나쁨).
+    """
+    if is_url(text, cfg.get("confluence_host", "")):
+        return "confluence"
+    if _any_match(cfg.get("meeting_patterns", []), text):
+        return "meeting"
+    if _any_match(cfg.get("messenger_patterns", []), text):
+        return "messenger"
     return None
 
 
@@ -279,10 +309,14 @@ def write_text(path, text):
 # ---------------------------------------------------------------------------
 
 def save_messenger(raw_dir, title, body, date_patterns, now=None, source="messenger"):
-    """raw/<source>/YYYY-MM-DD_<제목>.md 로 저장하고 경로를 반환. 회의록은 source="meeting"."""
+    """raw/<source>/YYYY-MM-DD_<제목>.md 로 저장하고 경로를 반환. 회의록은 source="meeting".
+
+    날짜: 본문 → 없으면 제목(불러온 파일명, YYMMDD 포함) → 없으면 오늘.
+    """
     now = now or datetime.datetime.now()
     title = title.strip() or fallback_title(body)
-    date = extract_date(body, date_patterns, now.date().isoformat())
+    date = (extract_date(body, date_patterns, None)
+            or extract_date(title, list(date_patterns) + TITLE_DATE_PATTERNS, now.date().isoformat()))
     path = unique_path(os.path.join(raw_dir, source, f"{date}_{sanitize_filename(title)}.md"))
     fm = build_frontmatter({"source": source, "title": title, "date": date,
                             "collected_at": now_str(now)})
@@ -506,7 +540,7 @@ class App:
         frm.columnconfigure(1, weight=1)
         frm.rowconfigure(2, weight=1)
 
-        # 0. 유형: txt를 불러오면 자동 판별 (판별 안 되면 선택 유지)
+        # 0. 유형: txt를 불러오거나 붙여넣으면 자동 판별 (판별 안 되면 선택 유지)
         tk.Label(frm, text="유형").grid(row=0, column=0, sticky="w")
         self.kind_var = tk.StringVar(value="messenger")
         kinds = tk.Frame(frm)
@@ -529,6 +563,9 @@ class App:
         tk.Label(frm, text="본문").grid(row=2, column=0, sticky="nw", pady=6)
         self.body = scrolledtext.ScrolledText(frm, wrap="word", undo=True, height=12)
         self.body.grid(row=2, column=1, sticky="nsew", **pad)
+        # 메신저 대화는 주로 붙여넣기로 들어오므로 붙여넣기 뒤에도 유형 판별
+        self.body.bind("<<Paste>>", self.on_paste)
+        self.body.bind("<<PasteSelection>>", self.on_paste)
         side = tk.Frame(frm)
         side.grid(row=2, column=2, sticky="n", **pad)
         self.btn_open = tk.Button(side, text="txt 열기…", command=self.on_open_txt)
@@ -623,13 +660,26 @@ class App:
         self.body.delete("1.0", "end")
         self.body.insert("1.0", text)
         self.title_var.set(os.path.splitext(os.path.basename(path))[0])
-        kind = detect_kind(text, self.cfg)
+        self._apply_kind(detect_kind(text, self.cfg), f"불러옴: {os.path.basename(path)}")
+
+    def _apply_kind(self, kind, prefix):
+        """판별 결과로 라디오를 바꾸고 상태줄에 표시. None이면 선택 유지."""
         if kind:
             self.kind_var.set(kind)
-            label = {"confluence": "Confluence로", "meeting": "회의록으로"}[kind]
-            self.status(f"불러옴: {os.path.basename(path)} ({label} 판별)")
+            label = {"confluence": "Confluence로", "meeting": "회의록으로", "messenger": "메신저로"}[kind]
+            self.status(f"{prefix} ({label} 판별)")
         else:
-            self.status(f"불러옴: {os.path.basename(path)} (유형 판별 안 됨, 선택 유지)")
+            self.status(f"{prefix} (유형 판별 안 됨, 선택 유지)")
+
+    def on_paste(self, event=None):
+        # 기본 붙여넣기(Text 클래스 바인딩)가 끝난 뒤 판별하도록 미룸
+        self.root.after_idle(self.detect_body_kind)
+
+    def detect_body_kind(self):
+        body = self.get_body()
+        if self.busy or not body.strip():  # 제목 제안 중(라디오 비활성)이거나 빈 본문이면 그대로 둠
+            return
+        self._apply_kind(detect_kind(body, self.cfg), "붙여넣음")
 
     def on_drop(self, event):
         paths = self.root.tk.splitlist(event.data)

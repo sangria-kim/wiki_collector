@@ -75,10 +75,44 @@ def test_is_url():
 def test_detect_kind():
     cfg = dict(wc.DEFAULT_CONFIG)
     assert wc.detect_kind("https://c.example.com/pages/1", cfg) == "confluence"
+    assert wc.detect_kind("\n발화자 1  (00:01)\n음성 녹음 중입니다. \n\n발화자 2  (00:04)\n음성 녹음입니다. \n", cfg) == "meeting"
+    assert wc.detect_kind("\n발화자 1  (00:01)\n음성 녹음 중입니다. \n\n발화자 2  (00:04)\n음성 녹음입니다. \n".replace("\n", "\r\n"), cfg) == "meeting"
+    assert wc.detect_kind("발화자 3  (1:02:03)\n내용", cfg) == "meeting"
+    assert wc.detect_kind("[김상정 (Nickname)] 2026-09-28 00:59\n메신저 내용\n\n[김상정] 2026-09-28 01:02\n메신저 내용2\n", cfg) == "messenger"  # 닉네임 괄호 있음/없음
+    assert wc.detect_kind("앞 설명\n[홍길동] 2026-09-28 9:05\r\n안녕", cfg) == "messenger"
+    assert wc.detect_kind("[공지] 2026-09-28 배포", cfg) is None  # 시각이 없으면 헤더 아님
+    assert wc.detect_kind("홍길동: 안녕", cfg) is None
+    cfg["meeting_patterns"] = []
     assert wc.detect_kind("회의록\n참석자: 홍길동", cfg) is None  # 패턴이 비어 있으면 판별 안 됨
     cfg["meeting_patterns"] = ["[", r"^회의록"]  # 잘못된 정규식은 건너뜀
     assert wc.detect_kind("회의록\n참석자: 홍길동", cfg) == "meeting"
     assert wc.detect_kind("홍길동: 안녕", cfg) is None
+
+
+def test_decode_utf16():
+    text = "\n발화자 1  (00:01)\n음성 녹음 중입니다. \n\n발화자 2  (00:04)\n음성 녹음입니다. \n"
+    assert wc.decode_bytes(text.encode("utf-16")) == text  # BOM 포함 (LE)
+    assert wc.decode_bytes(b"\xfe\xff" + text.encode("utf-16-be")) == text
+    wc.decode_bytes(text.encode("utf-16")[:-1])  # 잘린(홀수 길이) 파일도 예외 없음
+    with tempfile.TemporaryDirectory() as d:
+        p = os.path.join(d, "rec.txt")
+        with open(p, "wb") as f:
+            f.write(text.replace("\n", "\r\n").encode("utf-16"))
+        assert wc.read_text_file(p) == text  # CRLF → LF
+
+
+def test_header_and_filename_date():
+    pats = wc.DEFAULT_CONFIG["date_patterns"]
+    # 본문 중간 줄의 날짜보다 [이름] 헤더의 날짜를 우선
+    assert wc.extract_date("[김상정 (Nick)] 2026-09-28 00:59\n2026-10-01 배포 예정", pats, "x") == "2026-09-28"
+    with tempfile.TemporaryDirectory() as d:
+        # 전사 본문에 날짜가 없으면 제목(파일명)의 YYMMDD를 씀. 본문의 6자리 숫자는 무시
+        path = wc.save_messenger(d, "회의_260928_2", "발화자 1  (00:01)\n주문번호 250101", pats,
+                                 now=NOW, source="meeting")
+        assert os.path.basename(path) == "2026-09-28_회의_260928_2.md"
+        assert "date: 2026-09-28" in open(path, encoding="utf-8").read()
+        path = wc.save_messenger(d, "제목", "발화자 1  (00:01)\n내용", pats, now=NOW, source="meeting")
+        assert os.path.basename(path).startswith("2026-09-25_")  # 둘 다 없으면 오늘
 
 
 def test_titles():
@@ -239,11 +273,17 @@ def test_config():
     with tempfile.TemporaryDirectory() as d:
         p = os.path.join(d, "config.json")
         cfg = wc.load_config(p)
-        assert os.path.exists(p) and cfg["confluence_timeout"] == 180 and cfg["meeting_patterns"] == []
+        assert os.path.exists(p) and cfg["confluence_timeout"] == 180
+        assert cfg["meeting_patterns"] == wc.DEFAULT_CONFIG["meeting_patterns"] and cfg["messenger_patterns"]
         with open(p, "w", encoding="utf-8") as f:
             json.dump({"raw_dir": "R", "confluence_timeout": 300}, f)
         cfg = wc.load_config(p)
         assert cfg["raw_dir"] == "R" and cfg["confluence_timeout"] == 300 and cfg["wiki_cmd"]
+        with open(p, "w", encoding="utf-8") as f:  # 규칙 도입 전 config의 빈 meeting_patterns
+            json.dump({"meeting_patterns": [], "messenger_patterns": ["x"]}, f)
+        cfg = wc.load_config(p)
+        assert cfg["meeting_patterns"] == wc.DEFAULT_CONFIG["meeting_patterns"]
+        assert cfg["messenger_patterns"] == ["x"]
 
 
 if __name__ == "__main__":
