@@ -1,7 +1,7 @@
 # wiki_collector
 llm-wiki에 추가할 raw 자료들을 수집
 
-메신저 대화(복붙 / export txt)와 Confluence 페이지를 llm-wiki의 `raw/` 폴더에 저장하고, 버튼 하나로 Claude CLI를 불러 wiki 변환까지 실행하는 작은 Windows 데스크톱 앱입니다.
+메신저 대화(복붙 / export txt), 회의 녹취(전사 txt), Confluence 페이지를 llm-wiki의 `raw/` 폴더에 저장하고, 버튼 하나로 Claude CLI를 불러 wiki 변환까지 실행하는 작은 Windows 데스크톱 앱입니다.
 
 ## 실행
 
@@ -24,7 +24,8 @@ build.bat      → dist\WikiCollector.exe
 | 동작 | 결과 |
 | --- | --- |
 | 본문에 붙여넣기 → `raw에 저장` | `raw/messenger/YYYY-MM-DD_<제목>.md`. 제목이 비어 있으면 `title_cmd`로 자동 제안한 뒤 저장 |
-| `.txt`를 창 어디에나 드롭 (또는 `txt 열기…`) | 본문이 채워지고 제목칸에 파일명이 들어감 (utf-8 → cp949 순서로 디코딩) |
+| `.txt`를 창 어디에나 드롭 (또는 `txt 열기…`) | 본문이 채워지고 제목칸에 파일명이 들어감 (utf-8 → cp949 순서로 디코딩). 내용으로 유형(Confluence URL / `meeting_patterns` 매치 → 회의록)을 판별해 상단 라디오를 바꾸고, 판별되지 않으면 선택을 유지 |
+| 상단 `회의록` 선택 → `raw에 저장` | `raw/meeting/YYYY-MM-DD_<제목>.md`. Wiki 변환 대기 목록에는 넣지 않음. 저장 뒤 라디오는 `메신저`로 돌아감 |
 | 본문에 Confluence URL 한 줄만 넣고 → `raw에 저장` | `raw/confluence/<pageId>_<제목>.md`. 같은 pageId가 있으면 덮어쓰기(업데이트), 실패하거나 빈 출력이면 저장하지 않음 |
 | `Wiki로 변환` | 대기 목록(`raw/.wiki_collector_pending.json`)의 파일을 `wiki_cmd`로 변환. 성공하면 목록을 비우고, "미분류:" 줄은 결과 창 위쪽에 따로 표시 |
 
@@ -40,6 +41,7 @@ build.bat      → dist\WikiCollector.exe
 | `wiki_cmd` / `wiki_prompt` | wiki 변환 명령과 프롬프트 (`{files}` = raw 기준 상대경로 목록, `{raw_dir}`) |
 | `*_timeout` | 초 단위 (제목 60, Confluence 180, wiki 1800) |
 | `date_patterns` | 메신저 대화 날짜 추출용 정규식 목록 (named group `y`, `m`, `d`) |
+| `meeting_patterns` | 회의록 판별용 정규식 **리스트** (줄 단위 `^` 매치, 잘못된 정규식은 무시). 기본값 `[]` = 자동 판별 안 함. 기존 `config.json`에는 직접 추가 |
 
 명령 템플릿 규칙:
 - `*_cmd`에 `{prompt}`가 없으면 렌더링된 `*_prompt`를 **stdin으로** 넘깁니다 (기본값. 긴 본문과 줄바꿈도 안전).
